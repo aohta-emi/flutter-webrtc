@@ -9,11 +9,22 @@
 // interfaces and never passes a std:: type across: the vtable slots, the two
 // object layouts read below and the argument passing were checked against
 // libwebrtc.m150.7871.02 for linux-x64 with tool/check_webrtc_abi.py (the
-// prebuilt .so keeps its symbol table). Itanium C++ ABI only: Linux. macOS
-// uses another SDK, and MSVC lays out vtables differently.
+// prebuilt .so keeps its symbol table).
+//
+// macOS (common/darwin/Classes/FlutterFrameHooks.mm) uses the frame
+// transformer part only (RefCounted to RtpReceiver::SetFrameTransformer),
+// against the WebRTC-SDK framework 150.7871.01 (x86_64 and arm64), built
+// from the same libwebrtc branch with the same C++ ABI (Itanium vtables,
+// Chromium's libc++). tool/check_webrtc_abi.py checks what that framework
+// exports: RtpReceiverInterface's slots up to SetFrameTransformer, the
+// receiver transformer's Transform slot and calling convention, and the
+// Objective-C instance variable that holds the native receiver. The video
+// sink part and the object offsets are not used there. MSVC lays out
+// vtables differently: no Windows.
 //
 // Re-run tool/check_webrtc_abi.py for every libwebrtc bump
-// (third_party/libwebrtc_version.ini) and update the slots it reports.
+// (third_party/libwebrtc_version.ini, the WebRTC-SDK version of the darwin
+// podspecs and Package.swift files) and update the slots it reports.
 #ifndef FLUTTER_WEBRTC_WEBRTC_ABI_H_
 #define FLUTTER_WEBRTC_WEBRTC_ABI_H_
 
