@@ -1,3 +1,4 @@
+#import "FlutterFrameHooks.h"
 #import "FlutterWebRTCPlugin.h"
 
 #import <WebRTC/RTCMediaStream.h>
@@ -20,6 +21,16 @@
                               messenger:(NSObject<FlutterBinaryMessenger>*)messenger;
 
 - (void)dispose;
+
+// Per-frame hooks on the receiver of the track shown (FlutterFrameHooks.h).
+// While a decoded frame hook is attached, every frame goes through it
+// before it is drawn into the texture.
+- (BOOL)attachFrameHooksToReceiver:(RTCRtpReceiver*)receiver
+                               tag:(int64_t)tag
+              encodedFrameObserver:(FlutterEncodedFrameObserver)encoded
+                  decodedFrameHook:(FlutterDecodedFrameHook)decoded
+                             error:(NSString**)error;
+- (void)detachFrameHooks;
 
 @end
 

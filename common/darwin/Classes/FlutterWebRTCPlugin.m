@@ -1049,6 +1049,39 @@ static void FlutterWebRTCApplyFieldTrials(void) {
     }
     [self rendererSetSrcObject:render stream:videoTrack];
     result(nil);
+  } else if ([@"videoRendererAttachFrameHooks" isEqualToString:call.method]) {
+    NSDictionary* argsMap = call.arguments;
+    FlutterRTCVideoRenderer* render = self.renders[argsMap[@"textureId"]];
+    RTCPeerConnection* peerConnection = self.peerConnections[argsMap[@"peerConnectionId"]];
+    RTCRtpReceiver* receiver =
+        peerConnection ? [self getRtpReceiverById:peerConnection Id:argsMap[@"rtpReceiverId"]]
+                       : nil;
+    NSString* error = nil;
+    if (render == nil) {
+      error = @"texture not found";
+    } else if (peerConnection == nil) {
+      error = @"peerConnection not found";
+    } else if (receiver == nil) {
+      error = @"receiver not found";
+    } else {
+      // Function addresses (dart:ffi Pointer.address); 0 means none.
+      const intptr_t encoded = (intptr_t)[argsMap[@"encodedFrameObserver"] longLongValue];
+      const intptr_t decoded = (intptr_t)[argsMap[@"decodedFrameHook"] longLongValue];
+      [render attachFrameHooksToReceiver:receiver
+                                     tag:[argsMap[@"tag"] longLongValue]
+                    encodedFrameObserver:(FlutterEncodedFrameObserver)encoded
+                        decodedFrameHook:(FlutterDecodedFrameHook)decoded
+                                   error:&error];
+    }
+    if (error != nil) {
+      result([FlutterError errorWithCode:@"AttachFrameHooksFailed" message:error details:nil]);
+    } else {
+      result(nil);
+    }
+  } else if ([@"videoRendererDetachFrameHooks" isEqualToString:call.method]) {
+    NSDictionary* argsMap = call.arguments;
+    [self.renders[argsMap[@"textureId"]] detachFrameHooks];
+    result(nil);
   }
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
   else if ([@"videoPlatformViewRendererSetSrcObject" isEqualToString:call.method]) {

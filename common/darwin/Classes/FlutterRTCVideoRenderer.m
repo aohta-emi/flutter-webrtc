@@ -20,6 +20,10 @@
   bool _isFirstFrameRendered;
   bool _frameAvailable;
   os_unfair_lock _lock;
+  // The frame hooks, if any; guarded by _hooksLock (frames arrive on
+  // libwebrtc's thread).
+  FlutterFrameHooks* _frameHooks;
+  os_unfair_lock _hooksLock;
 }
 
 @synthesize textureId = _textureId;
@@ -32,6 +36,7 @@
   self = [super init];
   if (self) {
     _lock = OS_UNFAIR_LOCK_INIT;
+    _hooksLock = OS_UNFAIR_LOCK_INIT;
     _isFirstFrameRendered = false;
     _frameAvailable = false;
     _frameSize = CGSizeZero;
@@ -63,6 +68,7 @@
 }
 
 - (void)dispose {
+  [self detachFrameHooks];
   [_eventChannel setStreamHandler:nil];
   _eventChannel = nil;
   os_unfair_lock_lock(&_lock);
@@ -79,6 +85,7 @@
 - (void)setVideoTrack:(RTCVideoTrack*)videoTrack {
   RTCVideoTrack* oldValue = self.videoTrack;
   if (oldValue != videoTrack) {
+    [self detachFrameHooks];
     os_unfair_lock_lock(&_lock);
     _videoTrack = videoTrack;
     os_unfair_lock_unlock(&_lock);
@@ -192,8 +199,45 @@
   CVPixelBufferUnlockBaseAddress(outputPixelBuffer, 0);
 }
 
+- (BOOL)attachFrameHooksToReceiver:(RTCRtpReceiver*)receiver
+                               tag:(int64_t)tag
+              encodedFrameObserver:(FlutterEncodedFrameObserver)encoded
+                  decodedFrameHook:(FlutterDecodedFrameHook)decoded
+                             error:(NSString**)error {
+  [self detachFrameHooks];
+  FlutterFrameHooks* hooks = [FlutterFrameHooks attachToReceiver:receiver
+                                                             tag:tag
+                                            encodedFrameObserver:encoded
+                                                decodedFrameHook:decoded
+                                                           error:error];
+  if (hooks == nil) {
+    return NO;
+  }
+  os_unfair_lock_lock(&_hooksLock);
+  _frameHooks = hooks;
+  os_unfair_lock_unlock(&_hooksLock);
+  return YES;
+}
+
+- (void)detachFrameHooks {
+  os_unfair_lock_lock(&_hooksLock);
+  FlutterFrameHooks* hooks = _frameHooks;
+  _frameHooks = nil;
+  os_unfair_lock_unlock(&_hooksLock);
+  [hooks detach];
+}
+
 #pragma mark - RTCVideoRenderer methods
 - (void)renderFrame:(RTCVideoFrame*)frame {
+  os_unfair_lock_lock(&_hooksLock);
+  FlutterFrameHooks* hooks = _frameHooks;
+  os_unfair_lock_unlock(&_hooksLock);
+  if (hooks.hasDecodedFrameHook) {
+    frame = [hooks processDecodedFrame:frame];
+    if (frame == nil) {
+      return;
+    }
+  }
 
   os_unfair_lock_lock(&_lock);
   if(_videoTrack == nil) {

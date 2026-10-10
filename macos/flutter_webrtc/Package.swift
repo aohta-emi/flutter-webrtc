@@ -39,5 +39,7 @@ let package = Package(
                 .linkedFramework("ScreenCaptureKit")
             ]
         )
-    ]
+    ],
+    // FlutterFrameHooks.mm (webrtc_abi.h) needs C++17.
+    cxxLanguageStandard: .cxx17
 )
