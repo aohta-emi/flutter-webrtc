@@ -1,7 +1,7 @@
 # Frame hooks: encoded frame observer and decoded frame hook
 
 This branch adds two native per-frame hooks on a received video track
-(Linux desktop for now):
+(Linux and macOS desktop for now):
 
 ```text
 RTP -> jitter buffer -> [frame transformer] -> decoder -> [video sink] -> texture
@@ -72,8 +72,10 @@ await FrameHooks.detach(renderer);
   implementation, and when the receiver does not look like the libwebrtc
   build the hooks were checked against (see below).
 - With `FLUTTER_WEBRTC_FRAME_HOOKS_LOG=<file>` (or `-` for stderr) the
-  sink logs what it adds per frame (the I420 copy and the hook) every 300
+  plugin logs what it adds per frame (the I420 copy and the hook) every 300
   frames.
+- `DynamicLibrary.open` takes a `.dylib` on macOS, typically bundled in the
+  app's `Contents/Frameworks`.
 
 ## How it works
 
@@ -98,12 +100,46 @@ fix `webrtc_abi.h` before shipping if it reports a problem. At runtime the
 plugin also checks that the objects it reads by offset belong to
 libwebrtc's shared object.
 
+### macOS
+
+macOS uses the WebRTC-SDK framework (the `WebRTC-SDK` pod, or the
+`WebRTC.xcframework` binary target with Swift Package Manager) and its
+Objective-C API (`common/darwin/Classes/FlutterFrameHooks.mm`):
+
+- **Decoded frame hook**: no native code needed. `FlutterRTCVideoRenderer`
+  gets every frame of the track as an `RTCVideoFrame`, whose `timeStamp` is
+  the RTP timestamp. With a hook attached it converts the buffer to I420
+  first (`toI420`: a VideoToolbox NV12 pixel buffer becomes a new I420
+  buffer; a buffer that is I420 already is copied, as other renderers may
+  share it), calls the hook, and draws the result. The hook gets I420 as on
+  Linux, so the same function works on both.
+- **Encoded frame observer**: the framework has no Objective-C API for a
+  frame transformer (`RTCFrameCryptor` installs its own AES-GCM one). The
+  plugin reads the native `webrtc::RtpReceiverInterface` from
+  `RTCRtpReceiver`'s `_nativeRtpReceiver` instance variable (its name and
+  type encoding are checked at runtime through the Objective-C runtime, and
+  the object's vtable must lie in the framework's image) and installs the
+  same pass-through transformer as on Linux through `webrtc_abi.h`.
+
+The framework exports the vtables of `webrtc::RtpReceiverInterface` and
+`webrtc::FrameCryptorTransformer` and keeps RTTI, so the same tool checks
+it, both slices (x86_64 and arm64):
+
+```bash
+tool/check_webrtc_abi.py <app>/build/macos/SourcePackages/artifacts/flutter-webrtc/WebRTC/WebRTC.xcframework/macos-arm64_x86_64/WebRTC.framework
+```
+
+(with CocoaPods: `macos/Pods/WebRTC-SDK/WebRTC.xcframework/macos-arm64_x86_64/WebRTC.framework`).
+Run it after every `WebRTC-SDK` version change in `macos/flutter_webrtc.podspec`
+and `macos/flutter_webrtc/Package.swift`.
+
 ## Platforms
 
 | Platform | State |
 | :-- | :-- |
 | Linux (x64) | implemented, checked against libwebrtc m150.7871.02 |
+| macOS (x86_64, arm64) | implemented, checked against WebRTC-SDK 150.7871.01 |
 | Linux (arm64), embedded Linux | compiled in, not yet checked (the ABI check reads x86-64 code) |
 | Windows | not yet: MSVC lays out vtables differently; attaching fails |
-| macOS, iOS | not yet: the method calls are not handled |
+| iOS | compiled in (the darwin code is shared), not yet checked |
 | Android, Web | not available |

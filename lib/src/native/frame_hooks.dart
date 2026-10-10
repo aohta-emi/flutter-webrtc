@@ -5,11 +5,13 @@ import 'rtc_video_renderer_impl.dart';
 import 'utils.dart';
 
 /// Per-frame hooks on a received video track: an encoded frame observer and
-/// a decoded frame hook (Documentation/frame-hooks.md). Linux only for now.
+/// a decoded frame hook (Documentation/frame-hooks.md). Linux and macOS for
+/// now.
 ///
 /// Both are addresses of native C functions, for example from dart:ffi
 /// `Pointer.address` of a function in a native library, with the signatures
-/// in `common/cpp/include/flutter_frame_hooks.h`:
+/// in `common/cpp/include/flutter_frame_hooks.h` (the same on all
+/// platforms):
 ///
 /// * the encoded frame observer gets every encoded frame the receiver gets
 ///   (its bytes, RTP timestamp, frame type and RTP payload type), which then

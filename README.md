@@ -8,7 +8,7 @@ WebRTC plugin for Flutter Mobile/Desktop/Web
 > releases plus native per-frame hooks on received video: an encoded frame
 > observer (bytes, RTP timestamp, frame type, payload type) and a decoded
 > frame hook (a writable I420 copy and its RTP timestamp, before the
-> renderer). Linux only for now. See
+> renderer). Linux and macOS for now. See
 > [Documentation/frame-hooks.md](Documentation/frame-hooks.md). Everything
 > else is upstream flutter_webrtc.
 
