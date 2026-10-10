@@ -524,6 +524,24 @@ void FlutterWebRTC::HandleMethodCall(
     VideoRendererSetSrcObject(texture_id, stream_id, owner_tag, track_id);
     result->Success();
   } else if (method_call.method_name().compare(
+                 "videoRendererAttachFrameHooks") == 0) {
+    if (!method_call.arguments()) {
+      result->Error("Bad Arguments", "Null arguments received");
+      return;
+    }
+    VideoRendererAttachFrameHooks(
+        GetValue<EncodableMap>(*method_call.arguments()), std::move(result));
+  } else if (method_call.method_name().compare(
+                 "videoRendererDetachFrameHooks") == 0) {
+    if (!method_call.arguments()) {
+      result->Error("Bad Arguments", "Null arguments received");
+      return;
+    }
+    const EncodableMap params =
+        GetValue<EncodableMap>(*method_call.arguments());
+    VideoRendererDetachFrameHooks(findLongInt(params, "textureId"),
+                                  std::move(result));
+  } else if (method_call.method_name().compare(
                  "mediaStreamTrackSwitchCamera") == 0) {
     if (!method_call.arguments()) {
       result->Error("Bad Arguments", "Null constraints arguments received");

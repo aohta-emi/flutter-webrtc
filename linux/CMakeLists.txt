@@ -23,6 +23,7 @@ add_library(${PLUGIN_NAME} SHARED
   "../common/cpp/src/flutter_utf8_sanitize.cc"
   "../common/cpp/src/flutter_peerconnection.cc"
   "../common/cpp/src/flutter_frame_capturer.cc"
+  "../common/cpp/src/flutter_frame_hooks.cc"
   "../common/cpp/src/flutter_video_renderer.cc"
   "../common/cpp/src/flutter_screen_capture.cc"
   "../common/cpp/src/flutter_webrtc.cc"

@@ -2,6 +2,7 @@
 #define FLUTTER_WEBRTC_RTC_VIDEO_RENDERER_HXX
 
 #include "flutter_common.h"
+#include "flutter_frame_hooks.h"
 #include "flutter_webrtc_base.h"
 
 #include "rtc_video_frame.h"
@@ -39,6 +40,17 @@ class FlutterVideoRenderer
 
   bool CheckVideoTrack(std::string mediaId);
 
+  // Per-frame hooks on the receiver of the track shown (an encoded frame
+  // observer and a decoded frame hook, flutter_frame_hooks.h). While a
+  // decoded frame hook is attached, frames come from the hooks' sink
+  // instead of the track's renderer interface.
+  bool AttachFrameHooks(scoped_refptr<RTCRtpReceiver> receiver,
+                        int64_t tag,
+                        EncodedFrameObserver encoded,
+                        DecodedFrameHook decoded,
+                        std::string* error);
+  void DetachFrameHooks();
+
   std::string media_stream_id;
 
  private:
@@ -58,6 +70,7 @@ class FlutterVideoRenderer
   mutable std::shared_ptr<uint8_t[]> rgb_buffer_;
   mutable std::mutex mutex_;
   RTCVideoFrame::VideoRotation rotation_ = RTCVideoFrame::kVideoRotation_0;
+  std::unique_ptr<FrameHooks> frame_hooks_;
 };
 
 class FlutterVideoRendererManager {
@@ -73,6 +86,11 @@ class FlutterVideoRendererManager {
 
   void VideoRendererDispose(int64_t texture_id,
                             std::unique_ptr<MethodResultProxy> result);
+
+  void VideoRendererAttachFrameHooks(const EncodableMap& params,
+                                     std::unique_ptr<MethodResultProxy> result);
+  void VideoRendererDetachFrameHooks(int64_t texture_id,
+                                     std::unique_ptr<MethodResultProxy> result);
 
  private:
   FlutterWebRTCBase* base_;

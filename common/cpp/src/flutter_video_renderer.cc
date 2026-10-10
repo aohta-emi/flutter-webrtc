@@ -2,7 +2,9 @@
 
 namespace flutter_webrtc_plugin {
 
-FlutterVideoRenderer::~FlutterVideoRenderer() {}
+FlutterVideoRenderer::~FlutterVideoRenderer() {
+  frame_hooks_.reset();
+}
 
 void FlutterVideoRenderer::initialize(
     TextureRegistrar* registrar,
@@ -83,6 +85,7 @@ void FlutterVideoRenderer::OnFrame(scoped_refptr<RTCVideoFrame> frame) {
 
 void FlutterVideoRenderer::SetVideoTrack(scoped_refptr<RTCVideoTrack> track) {
   if (track_ != track) {
+    DetachFrameHooks();
     if (track_)
       track_->RemoveRenderer(this);
     track_ = track;
@@ -91,6 +94,34 @@ void FlutterVideoRenderer::SetVideoTrack(scoped_refptr<RTCVideoTrack> track) {
     if (track_)
       track_->AddRenderer(this);
   }
+}
+
+bool FlutterVideoRenderer::AttachFrameHooks(
+    scoped_refptr<RTCRtpReceiver> receiver,
+    int64_t tag,
+    EncodedFrameObserver encoded,
+    DecodedFrameHook decoded,
+    std::string* error) {
+  DetachFrameHooks();
+  auto hooks = FrameHooks::Attach(
+      receiver, tag, encoded, decoded,
+      [this](scoped_refptr<RTCVideoFrame> frame) { OnFrame(frame); }, error);
+  if (!hooks)
+    return false;
+  // One source of frames: the hooks' sink replaces the track's renderer.
+  if (hooks->has_decoded_hook() && track_)
+    track_->RemoveRenderer(this);
+  frame_hooks_ = std::move(hooks);
+  return true;
+}
+
+void FlutterVideoRenderer::DetachFrameHooks() {
+  if (!frame_hooks_)
+    return;
+  const bool had_sink = frame_hooks_->has_decoded_hook();
+  frame_hooks_.reset();
+  if (had_sink && track_)
+    track_->AddRenderer(this);
 }
 
 bool FlutterVideoRenderer::CheckMediaStream(std::string mediaId) {
@@ -160,6 +191,60 @@ void FlutterVideoRendererManager::VideoRendererSetSrcObject(
       renderer->SetVideoTrack(nullptr);
     }
   }
+}
+
+namespace {
+
+template <class Fn>
+Fn FunctionAddress(const EncodableMap& params, const std::string& key) {
+  // findLongInt gives -1 for a missing key; 0 means no function.
+  const int64_t address = findLongInt(params, key);
+  return address > 0 ? reinterpret_cast<Fn>(static_cast<intptr_t>(address))
+                     : nullptr;
+}
+
+}  // namespace
+
+void FlutterVideoRendererManager::VideoRendererAttachFrameHooks(
+    const EncodableMap& params,
+    std::unique_ptr<MethodResultProxy> result) {
+  const int64_t texture_id = findLongInt(params, "textureId");
+  auto it = renderers_.find(texture_id);
+  if (it == renderers_.end()) {
+    result->Error("AttachFrameHooksFailed", "texture not found");
+    return;
+  }
+  RTCPeerConnection* pc =
+      base_->PeerConnectionForId(findString(params, "peerConnectionId"));
+  if (pc == nullptr) {
+    result->Error("AttachFrameHooksFailed", "peerConnection not found");
+    return;
+  }
+  auto receiver =
+      base_->GetRtpReceiverById(pc, findString(params, "rtpReceiverId"));
+  if (!receiver.get()) {
+    result->Error("AttachFrameHooksFailed", "receiver not found");
+    return;
+  }
+  auto encoded =
+      FunctionAddress<EncodedFrameObserver>(params, "encodedFrameObserver");
+  auto decoded = FunctionAddress<DecodedFrameHook>(params, "decodedFrameHook");
+  std::string error;
+  if (!it->second->AttachFrameHooks(receiver, findLongInt(params, "tag"),
+                                    encoded, decoded, &error)) {
+    result->Error("AttachFrameHooksFailed", error);
+    return;
+  }
+  result->Success();
+}
+
+void FlutterVideoRendererManager::VideoRendererDetachFrameHooks(
+    int64_t texture_id,
+    std::unique_ptr<MethodResultProxy> result) {
+  auto it = renderers_.find(texture_id);
+  if (it != renderers_.end())
+    it->second->DetachFrameHooks();
+  result->Success();
 }
 
 void FlutterVideoRendererManager::VideoRendererDispose(
