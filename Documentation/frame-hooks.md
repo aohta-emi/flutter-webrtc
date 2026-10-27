@@ -1,7 +1,7 @@
 # Frame hooks: encoded frame observer and decoded frame hook
 
 This branch adds two native per-frame hooks on a received video track
-(Linux and macOS desktop for now):
+(Linux, macOS and Windows desktop for now):
 
 ```text
 RTP -> jitter buffer -> [frame transformer] -> decoder -> [video sink] -> texture
@@ -133,6 +133,35 @@ tool/check_webrtc_abi.py <app>/build/macos/SourcePackages/artifacts/flutter-webr
 Run it after every `WebRTC-SDK` version change in `macos/flutter_webrtc.podspec`
 and `macos/flutter_webrtc/Package.swift`.
 
+### Windows
+
+Windows x64 uses the Linux code (`common/cpp/src/flutter_frame_hooks.cc`)
+against the prebuilt `libwebrtc.dll`, which is built with clang-cl and so
+follows the MSVC C++ ABI, as the plugin does:
+
+- The mirror needs no slot numbers there: MSVC lays it out as it lays out
+  the real interfaces, given the same virtual functions in the same order
+  and the same bases. Two interfaces are mirrored with their real secondary
+  bases, because MSVC keeps an override of a secondary base's function in
+  that base's vtable: `RtpReceiverInterface` (`SetFrameTransformer` is
+  `FrameTransformerHost`'s) and `VideoTrackInterface` (`AddOrUpdateSink` and
+  `RemoveSink` are `VideoSourceInterface`'s). `VideoSinkWants` uses a plain
+  struct for its `std::vector`, whose MSVC debug layout differs.
+- How `std::unique_ptr<TransformableFrameInterface>` is passed (the bare
+  pointer, or the address of a temporary) is told from the first frame:
+  whichever of the two is a libwebrtc object.
+- `libwebrtc.dll` keeps no symbols and no PDB is published, so the ABI tool
+  cannot check it. Instead, before installing anything, the plugin checks
+  that the receiver and the track are objects of `libwebrtc.dll` and that
+  `media_type()` and `state()` answer video and live; otherwise attaching
+  fails with "unexpected libwebrtc layout". Compare the mirror with the
+  headers of the new branch after every libwebrtc bump.
+
+Checked against libwebrtc m150.7871.02 win-x64 (debug build, Windows 11):
+both hooks on a 1280x720 H.264 track at 30 fps, every frame seen by the
+encoded frame observer, no frames dropped, the I420 copy and the hook
+about 2.3 ms a frame.
+
 ## Platforms
 
 | Platform | State |
@@ -140,6 +169,6 @@ and `macos/flutter_webrtc/Package.swift`.
 | Linux (x64) | implemented, checked against libwebrtc m150.7871.02 |
 | macOS (x86_64, arm64) | implemented, checked against WebRTC-SDK 150.7871.01 |
 | Linux (arm64), embedded Linux | compiled in, not yet checked (the ABI check reads x86-64 code) |
-| Windows | not yet: MSVC lays out vtables differently; attaching fails |
+| Windows (x64) | implemented, checked at runtime against libwebrtc m150.7871.02 (see above) |
 | iOS | compiled in (the darwin code is shared), not yet checked |
 | Android, Web | not available |
