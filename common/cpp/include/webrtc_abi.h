@@ -19,12 +19,32 @@
 // exports: RtpReceiverInterface's slots up to SetFrameTransformer, the
 // receiver transformer's Transform slot and calling convention, and the
 // Objective-C instance variable that holds the native receiver. The video
-// sink part and the object offsets are not used there. MSVC lays out
-// vtables differently: no Windows.
+// sink part and the object offsets are not used there.
+//
+// Windows (x64): the prebuilt libwebrtc.dll is built with clang-cl, so it
+// uses the MSVC C++ ABI, which the plugin's compiler (MSVC) produces for
+// this mirror too. Slot numbers are not written down there: the compiler
+// lays the mirror out as it lays out the real interfaces, provided the
+// mirror declares the same virtual functions in the same order with the
+// same bases. That matters where MSVC differs from the Itanium ABI:
+// - one destructor slot instead of two;
+// - a function that overrides one of a secondary base stays in that base's
+//   vtable: RtpReceiverInterface::SetFrameTransformer (FrameTransformerHost)
+//   and VideoTrackInterface::AddOrUpdateSink / RemoveSink
+//   (VideoSourceInterface), so those two classes are mirrored with their
+//   real bases (#if defined(_WIN32) below);
+// - std::vector in VideoSinkWants: MSVC's debug STL adds a member, so the
+//   mirror uses a plain struct of the same layout as libc++'s.
+// The .dll keeps no symbols (no PDB is published), so no tool checks this
+// build: the plugin checks at runtime that the objects belong to
+// libwebrtc.dll and that a few plain getters answer as they must before it
+// installs anything (flutter_frame_hooks.cc). Checked against
+// libwebrtc.m150.7871.02 win-x64 and the m150_release headers.
 //
 // Re-run tool/check_webrtc_abi.py for every libwebrtc bump
 // (third_party/libwebrtc_version.ini, the WebRTC-SDK version of the darwin
-// podspecs and Package.swift files) and update the slots it reports.
+// podspecs and Package.swift files) and update the slots it reports; on
+// Windows compare the headers of the new branch with the mirror.
 #ifndef FLUTTER_WEBRTC_WEBRTC_ABI_H_
 #define FLUTTER_WEBRTC_WEBRTC_ABI_H_
 
@@ -202,20 +222,97 @@ struct VideoSinkWants {
   struct Aggregates {
     bool any_active_without_requested_resolution = false;
   };
+#if defined(_WIN32)
+  // libc++'s std::vector (begin, end, end of storage), empty: MSVC's own
+  // has an extra member in debug builds.
+  struct Vector {
+    FrameSize* begin = nullptr;
+    FrameSize* end = nullptr;
+    FrameSize* capacity = nullptr;
+  };
+#endif
   bool rotation_applied = false;
   bool black_frames = false;
   int max_pixel_count = INT_MAX;
   std::optional<int> target_pixel_count;
   int max_framerate_fps = INT_MAX;
   int resolution_alignment = 1;
+#if defined(_WIN32)
+  Vector resolutions;
+#else
   std::vector<FrameSize> resolutions;
+#endif
   std::optional<FrameSize> requested_resolution;
   bool is_active = false;
   std::optional<Aggregates> aggregates;
 };
-#if defined(__linux__) && UINTPTR_MAX == 0xffffffffffffffffu
+#if (defined(__linux__) || defined(_WIN32)) && UINTPTR_MAX == 0xffffffffffffffffu
 static_assert(sizeof(VideoSinkWants) == 64, "VideoSinkWants layout");
 #endif
+
+#if defined(_WIN32)
+
+// webrtc::NotifierInterface, MediaStreamTrackInterface's secondary base.
+class Notifier {
+ public:
+  virtual void RegisterObserver_(void*) = 0;
+  virtual void UnregisterObserver_(void*) = 0;
+  virtual ~Notifier() {}
+};
+
+// webrtc::MediaStreamTrackInterface.
+class MediaStreamTrack : public RefCounted, public Notifier {
+ public:
+  virtual void kind_() = 0;
+  virtual void id_() = 0;
+  virtual bool enabled() const = 0;
+  virtual void set_enabled_() = 0;
+  virtual int state() const = 0;  // TrackState: 0 live, 1 ended
+};
+
+// webrtc::VideoSourceInterface<webrtc::VideoFrame>, VideoTrackInterface's
+// secondary base: AddOrUpdateSink and RemoveSink are in its vtable.
+class VideoSource {
+ public:
+  virtual ~VideoSource() {}
+  virtual void AddOrUpdateSink(VideoSink* sink,
+                               const VideoSinkWants& wants) = 0;
+  virtual void RemoveSink(VideoSink* sink) = 0;
+  virtual void RequestRefreshFrame_() {}
+};
+
+// webrtc::VideoTrackInterface (the proxy the receiver returns).
+class VideoTrack : public MediaStreamTrack, public VideoSource {};
+
+// webrtc::FrameTransformerHost, RtpReceiverInterface's secondary base:
+// SetFrameTransformer is in its vtable.
+class FrameTransformerHost {
+ public:
+  virtual ~FrameTransformerHost() {}
+  virtual void SetFrameTransformer(RefPtr<FrameTransformer> transformer) = 0;
+};
+
+// webrtc::RtpReceiverInterface (the proxy the wrapper holds).
+class RtpReceiver : public RefCounted, public FrameTransformerHost {
+ public:
+  virtual RefPtr<VideoTrack> track() const = 0;  // MediaStreamTrack
+  virtual void dtls_transport_() = 0;
+  virtual void stream_ids_() = 0;
+  virtual void streams_() = 0;
+  virtual int media_type() const = 0;  // MediaType: 0 audio, 1 video
+  virtual void id_() = 0;
+  virtual void GetParameters_() = 0;
+  virtual void SetParameters_() = 0;
+  virtual void SetObserver_() = 0;
+  virtual void SetJitterBufferMinimumDelay_() = 0;
+  virtual void GetSources_() = 0;
+  virtual void SetFrameDecryptor_() = 0;
+  virtual void GetFrameDecryptor_() = 0;
+  virtual void SetDepacketizerToDecoderFrameTransformer_() = 0;
+  virtual void CreateSframeDecrypterOrError_() = 0;
+};
+
+#else  // Itanium
 
 // webrtc::VideoTrackInterface (the proxy the receiver returns).
 class VideoTrack : public RefCounted {
@@ -250,6 +347,8 @@ class RtpReceiver : public RefCounted {
   virtual void SetFrameTransformer(
       RefPtr<FrameTransformer> transformer) = 0;  // 18
 };
+
+#endif  // _WIN32
 
 }  // namespace webrtc_abi
 

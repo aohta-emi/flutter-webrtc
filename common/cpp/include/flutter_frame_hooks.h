@@ -17,9 +17,10 @@
 //
 // Both are plain C functions (from dart:ffi `Pointer.address`, or any
 // native library), called on libwebrtc's threads; they must not block. The
-// plugin knows nothing about what they do. Linux (Itanium C++ ABI) here;
-// macOS in common/darwin/Classes/FlutterFrameHooks.h; elsewhere attaching
-// fails with an error.
+// plugin knows nothing about what they do. Linux (Itanium C++ ABI) and
+// Windows x64 (MSVC C++ ABI) here; macOS in
+// common/darwin/Classes/FlutterFrameHooks.h; elsewhere attaching fails with
+// an error.
 #ifndef FLUTTER_WEBRTC_FRAME_HOOKS_H_
 #define FLUTTER_WEBRTC_FRAME_HOOKS_H_
 

@@ -1,9 +1,15 @@
 // Per-frame hooks on a received video track: see flutter_frame_hooks.h,
 // webrtc_abi.h and Documentation/frame-hooks.md.
+#if defined(_MSC_VER) && !defined(_CRT_SECURE_NO_WARNINGS)
+#define _CRT_SECURE_NO_WARNINGS  // getenv and fopen, as on the other platforms
+#endif
 #include "flutter_frame_hooks.h"
 
 #if defined(__linux__) && !defined(_MSC_VER)
 #include <dlfcn.h>
+#define FLUTTER_WEBRTC_FRAME_HOOKS_SUPPORTED 1
+#elif defined(_WIN64)
+#include <windows.h>
 #define FLUTTER_WEBRTC_FRAME_HOOKS_SUPPORTED 1
 #endif
 
@@ -27,13 +33,36 @@ bool IsLibwebrtcObject(const void* obj) {
   if (obj == nullptr)
     return false;
   const void* vtable = *reinterpret_cast<const void* const*>(obj);
+#if defined(_WIN32)
+  HMODULE lib = GetModuleHandleW(L"libwebrtc.dll");
+  HMODULE vt = nullptr;
+  if (lib == nullptr ||
+      !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                              GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                          static_cast<LPCWSTR>(vtable), &vt))
+    return false;
+  return vt == lib;
+#else
   Dl_info lib{}, vt{};
   if (dladdr(reinterpret_cast<void*>(&libwebrtc::LibWebRTC::Initialize),
              &lib) == 0 ||
       dladdr(vtable, &vt) == 0)
     return false;
   return lib.dli_fbase != nullptr && lib.dli_fbase == vt.dli_fbase;
+#endif
 }
+
+// How libwebrtc passes the std::unique_ptr<TransformableFrameInterface> of
+// Transform and OnTransformedFrame. Chromium's libc++ gives unique_ptr the
+// trivial ABI on Linux and macOS: the bare pointer (kDirect). On Windows
+// the MSVC ABI passes a class type with a non-trivial destructor by the
+// address of a temporary instead, unless the type has the trivial ABI too;
+// the first frame tells which (kIndirect: `arg` is that address).
+enum class FramePassing { kUnknown, kDirect, kIndirect };
+
+// webrtc::MediaType::VIDEO and MediaStreamTrackInterface::kLive.
+constexpr int kMediaTypeVideo = 1;
+constexpr int kTrackStateLive = 0;
 
 }  // namespace
 
@@ -55,7 +84,10 @@ class FrameHooks::Transformer : public FrameTransformer {
 
   void Detach() { observer_.store(nullptr); }
 
-  void Transform(TransformableFrame* frame) override {
+  void Transform(TransformableFrame* arg) override {
+    TransformableFrame* frame = Unwrap(arg);
+    if (frame == nullptr)
+      return;  // Not a frame we can read: leave it (never seen).
     if (auto observer = observer_.load()) {
       // A video receiver's transformer gets video frames only.
       auto* video = static_cast<TransformableVideoFrame*>(frame);
@@ -72,9 +104,15 @@ class FrameHooks::Transformer : public FrameTransformer {
       cb = it != sink_callbacks_.end() ? it->second : callback_;
     }
     if (cb) {
-      cb->OnTransformedFrame(frame);  // ownership passes on
+      // Ownership passes on, the way it came.
+      if (passing_.load() == FramePassing::kIndirect) {
+        TransformableFrame* holder = frame;  // a unique_ptr's storage
+        cb->OnTransformedFrame(reinterpret_cast<TransformableFrame*>(&holder));
+      } else {
+        cb->OnTransformedFrame(frame);
+      }
     } else {
-      delete frame;  // libwebrtc's deleting destructor (slot 1)
+      delete frame;  // libwebrtc's deleting destructor
     }
   }
 
@@ -102,6 +140,29 @@ class FrameHooks::Transformer : public FrameTransformer {
   ~Transformer() override = default;
 
  private:
+  // The frame `arg` stands for (see FramePassing), or null.
+  TransformableFrame* Unwrap(TransformableFrame* arg) {
+    FramePassing passing = passing_.load();
+    if (passing == FramePassing::kUnknown) {
+      if (IsLibwebrtcObject(arg)) {
+        passing = FramePassing::kDirect;
+      } else if (arg != nullptr &&
+                 IsLibwebrtcObject(*reinterpret_cast<void* const*>(arg))) {
+        passing = FramePassing::kIndirect;
+      } else {
+        return nullptr;
+      }
+      passing_.store(passing);
+    }
+    if (passing == FramePassing::kIndirect) {
+      // The temporary is the callee's to destroy: taking the pointer out
+      // and leaving the storage alone owns the frame.
+      return *reinterpret_cast<TransformableFrame* const*>(arg);
+    }
+    return arg;
+  }
+
+  std::atomic<FramePassing> passing_{FramePassing::kUnknown};
   const int64_t tag_;
   std::atomic<EncodedFrameObserver> observer_;
   mutable std::atomic<int> refs_{0};
@@ -197,12 +258,22 @@ std::unique_ptr<FrameHooks> FrameHooks::Attach(
     *error = "unexpected libwebrtc layout (RTCRtpReceiverImpl)";
     return nullptr;
   }
+  // A plain getter before anything is installed: a mirror that does not
+  // match the build reads the wrong slot here, not when installing.
+  if (native->media_type() != kMediaTypeVideo) {
+    *error = "unexpected libwebrtc layout (RtpReceiverInterface)";
+    return nullptr;
+  }
   std::unique_ptr<FrameHooks> hooks(new FrameHooks());
   hooks->native_receiver_ = RefPtr<RtpReceiver>(native);
   if (decoded != nullptr) {
     hooks->native_track_ = native->track();
     if (!IsLibwebrtcObject(hooks->native_track_.get())) {
       *error = "the receiver has no libwebrtc video track";
+      return nullptr;
+    }
+    if (hooks->native_track_->state() != kTrackStateLive) {
+      *error = "unexpected libwebrtc layout (VideoTrackInterface)";
       return nullptr;
     }
   }
